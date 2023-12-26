@@ -59,7 +59,6 @@ def process_img(df_chunk, model, preprocess):
 
 
 def main_text(df, batch_size=1000):
-    os.mkdir('pt_files', exists_ok = True)
     # import tokenizer
     tokenizer = open_clip.get_tokenizer('ViT-L-14-336')
     print('tokenizer import success')
@@ -160,6 +159,7 @@ def main_concat():
 if __name__ == "__main__":
     combined_df = pd.read_csv('combined_df.csv')
     print('df import success')
+    os.makedirs('pt_files', exist_ok= True)
     
     np.save('CLIP_style.npy', np.array(combined_df['Style']),allow_pickle=True)
     
