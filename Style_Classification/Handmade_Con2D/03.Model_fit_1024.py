@@ -1,7 +1,13 @@
 # imports
 import pandas as pd
 import numpy as np
-import tensorflow as tf
+import torch
+import torch.nn as nn
+from torch.utils.data import Dataset, DataLoader
+import torch.optim as optim
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torchsummary import summary
+from contextlib import redirect_stdout
 
 import os
 import h5py
@@ -11,51 +17,28 @@ import io
 
 from sklearn.calibration import LabelEncoder
 from sklearn.model_selection import train_test_split
-from tensorflow.keras.utils import to_categorical
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Input, Dense, Activation, BatchNormalization, Dropout, Conv2D, AvgPool2D, Flatten, LeakyReLU
-from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
-from tensorflow.keras.callbacks import Callback
-
-
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # or '3' to suppress most of the logs
-tf.get_logger().setLevel('WARNING')  # Adjust logging level
-
-# Set the GPU memory growth option
-gpus = tf.config.list_physical_devices('GPU')
-if gpus:
-    try:
-        # Restrict TensorFlow to allocate only the first GPU
-        tf.config.set_visible_devices(gpus[0], 'GPU')
-        # Enable memory growth to allocate GPU memory on an as-needed basis
-        tf.config.experimental.set_memory_growth(gpus[0], True)
-        # Set the = activationdesired memory limit (in MB)
-        tf.config.experimental.set_virtual_device_configuration(
-            gpus[0],
-            [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=20480)]  # 20GB
-        )
-    except RuntimeError as e:
-        print(e)
 
 # Load data
 
+# Paths & indices
+h5_path = '/home/all/processed_data/image_torchtensor_1024.h5'  # Update with your path
+styles = np.load('/home/all/processed_data/styles_1024.npy', allow_pickle=True)  # Your styles data
+
 # Load one image to get the input shape
-with h5py.File('image.h5', 'r') as h5file:
+with h5py.File(h5_path, 'r') as h5file:
     one_file = h5file['images'][0:1]  # Load the first image
 
-y = np.load('styles.npy', allow_pickle=True)
 # Not going to load X yet. because it is too big.
 # We are going to load X batch by batch when model.fit.
 
 le = LabelEncoder()
-y = le.fit_transform(y)
-
-# Assuming y contains integer labels
-y = to_categorical(y, num_classes=7)
+y = le.fit_transform(styles)
 
 # Assuming total number of images
 num_images = len(y)  # or len(combined_df)
 indices = np.arange(num_images)
+
+print('Data load success')
 
 # Split indices
 indices_train, indices_temp, y_train, y_temp = train_test_split(indices,y, test_size=0.2, random_state=1, stratify=y)
@@ -63,121 +46,249 @@ indices_val, indices_test, y_val, y_test = train_test_split(indices_temp, y_temp
 
 np.save('indices_test.npy', np.array(indices_test))
 
-# yield each batch
-def data_generator(h5_path, indices, styles, batch_size):
-    with h5py.File(h5_path, 'r') as h5file:
-        while True:
-            np.random.shuffle(indices)
-            for i in range(0, len(indices), batch_size):
-                batch_indices = indices[i:i + batch_size]
-                # Sort the batch_indices to meet HDF5's requirements
-                sorted_batch_indices = np.sort(batch_indices)
-                batch_images = h5file['images'][sorted_batch_indices]
-                batch_styles = styles[sorted_batch_indices]
-                yield batch_images, batch_styles
+class H5Dataset(Dataset):
+    def __init__(self, h5_path, indices, styles):
+        self.h5_path = h5_path
+        self.indices = indices
+        self.styles = styles
 
+    def __len__(self):
+        return len(self.indices)
 
-# Create generators
+    def __getitem__(self, idx):
+        with h5py.File(self.h5_path, 'r') as h5file:
+            # Use the index to access the image and label
+            image = h5file['images'][self.indices[idx]]
+            style = self.styles[self.indices[idx]]
+            return torch.from_numpy(image).float(), style
+
+# Load your data and labels
+train_data = H5Dataset(h5_path, indices_train, styles)
+val_data = H5Dataset(h5_path, indices_val, styles)
+test_data = H5Dataset(h5_path, indices_test, styles)
+
 batch_size = 8  # Define your batch size
-train_generator = data_generator('image.h5', indices_train, y, batch_size)
-val_generator = data_generator('image.h5', indices_val, y, batch_size)
-test_generator = data_generator('image.h5', indices_test, y, batch_size)
 
-steps_per_epoch = len(indices_train) // batch_size
-validation_steps = len(indices_test) // batch_size
+# Create data loaders
+train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
+val_loader = DataLoader(val_data, batch_size=batch_size, shuffle=False)
+test_loader = DataLoader(test_data, batch_size=batch_size, shuffle=False)
+
+print('Data loader set')
 
 
+# Handmade Conv2D Model
+class model(nn.Module):
+    def __init__(self):
+        super(model, self).__init__()
+        # Convolutional layers
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(in_channels=one_file.shape[1], out_channels=64, kernel_size=4, stride=1, padding='same'),
+            nn.BatchNorm2d(64),
+            nn.LeakyReLU(0.01),
+            nn.AvgPool2d(kernel_size=4)
+        )
+        self.conv2 = nn.Sequential(
+            nn.Conv2d(64, 32, 4, stride=1, padding='same'),
+            nn.BatchNorm2d(32),
+            nn.LeakyReLU(0.01),
+            nn.AvgPool2d(4)
+        )
+        self.conv3 = nn.Sequential(
+            nn.Conv2d(32, 16, 4, stride=1, padding='same'),
+            nn.BatchNorm2d(16),
+            nn.LeakyReLU(0.01),
+            nn.AvgPool2d(4)
+        )
+        
+        # Fully connected layers
+        self.fc = nn.Sequential(
+            nn.Flatten(),
+            nn.Dropout(0.3),
+            nn.Linear(4096, 512), # You need to calculate the input_shape_after_conv based on your input size
+            nn.BatchNorm1d(512),
+            nn.LeakyReLU(0.01),
+            nn.Linear(512, 64),
+            nn.BatchNorm1d(64),
+            nn.LeakyReLU(0.01),
+            nn.Linear(64, 7),
+            # nn.Softmax(dim=1)
+        )
 
-# model
-model = Sequential([
-    Input(shape=one_file.shape[1:]),
-    
-    Conv2D(filters=64, kernel_size=(4,4), strides=(1,1), padding='same'),
-    BatchNormalization(),
-    LeakyReLU(alpha=0.01),
-    AvgPool2D(pool_size=(4,4)),
-    
-    Conv2D(filters=32, kernel_size=(4,4), strides=(1,1), padding='same'),
-    BatchNormalization(),
-    LeakyReLU(alpha=0.01),
-    AvgPool2D(pool_size=(4,4)),
-    
-    Conv2D(filters=16, kernel_size=(4,4), strides=(1,1), padding='same'),
-    BatchNormalization(),
-    LeakyReLU(alpha=0.01),
-    AvgPool2D(pool_size=(4,4)),
-    
-    Flatten(),
-    Dropout(0.2),
-    
-    Dense(512),
-    BatchNormalization(),
-    LeakyReLU(alpha=0.01),
-    
-    Dense(64),
-    BatchNormalization(),
-    LeakyReLU(alpha=0.01),
-    
-    Dense(7),
-    Activation('softmax')
-])
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.conv2(x)
+        x = self.conv3(x)
+        x = self.fc(x)
+        return x
+
+# Initialize the model
+model = model()
 
 # Capture the summary output
 summary_string = io.StringIO()
-model.summary(print_fn=lambda x: summary_string.write(x + '\n'))
-summary = summary_string.getvalue()
+with redirect_stdout(summary_string):
+    summary(model, input_size=one_file.shape[1:], device="cpu")
+model_summary = summary_string.getvalue()
 summary_string.close()
 
 # Write the summary to a file
 with open('model_summary.txt', 'w') as file:
-    file.write(summary)
+    file.write(model_summary)
+    
+print('model_summary.txt saved')
 
-# compile the model
-model.compile(loss='categorical_crossentropy',
-              optimizer='adam',
-              metrics=['accuracy'])
+# # Capture the summary output
+# summary_string = io.StringIO()
+# model.summary(print_fn=lambda x: summary_string.write(x + '\n'))
+# summary = summary_string.getvalue()
+# summary_string.close()
 
-early_stopping = EarlyStopping(monitor='val_loss',
-                               patience=5,
-                               verbose=1,
-                               restore_best_weights=True)
+# # Write the summary to a file
+# with open('model_summary.txt', 'w') as file:
+#     file.write(summary)
 
-reduce_lr = ReduceLROnPlateau(monitor='val_loss',
-                              factor=0.2,
-                              patience=5,
-                              verbose=1,
-                              min_lr=0.001)
 
-model_checkpoint = ModelCheckpoint(filepath="best_model.h5",
-                                   monitor='val_loss',
-                                   save_best_only=True,
-                                   verbose=1)
+# Assuming 'model' is your PyTorch model
+criterion = nn.CrossEntropyLoss()  # For categorical crossentropy
+optimizer = optim.Adam(model.parameters(), lr=0.001)  # Using Adam optimizer
+num_epochs = 10000000
 
-class GarbageCollectorCallback(Callback):
-    def on_epoch_end(self, epoch, logs=None):
-        gc.collect()
+# Early Stopping and Model Checkpoint can be manually implemented in the training loop
+best_val_loss = float('inf')
+patience = 5  # For early stopping
+scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.2, patience=5, min_lr=0.001)
 
-    def on_batch_end(self, batch, logs=None):
-        gc.collect()
+# initialize history
+history = {'train_loss': [], 'val_loss': [], 'train_accuracy': [], 'val_accuracy': []}
+
+
+# # compile the model
+# model.compile(loss='categorical_crossentropy',
+#               optimizer='adam',
+#               metrics=['accuracy'])
+
+# early_stopping = EarlyStopping(monitor='val_loss',
+#                                patience=5,
+#                                verbose=1,
+#                                restore_best_weights=True)
+
+# reduce_lr = ReduceLROnPlateau(monitor='val_loss',
+#                               factor=0.2,
+#                               patience=5,
+#                               verbose=1,
+#                               min_lr=0.001)
+
+# model_checkpoint = ModelCheckpoint(filepath="best_model.h5",
+#                                    monitor='val_loss',
+#                                    save_best_only=True,
+#                                    verbose=1)
+
+# class GarbageCollectorCallback(Callback):
+#     def on_epoch_end(self, epoch, logs=None):
+#         gc.collect()
+
+#     def on_batch_end(self, batch, logs=None):
+#         gc.collect()
         
-gc_callback = GarbageCollectorCallback()
+# gc_callback = GarbageCollectorCallback()
 
 print('start fitting')
 
-history = model.fit(
-    train_generator,
-    steps_per_epoch=steps_per_epoch,
-    validation_data=val_generator,
-    validation_steps=validation_steps,
-    epochs=1000000,  # Set the number of epochs
-    verbose=1,
-    callbacks=[early_stopping, reduce_lr, model_checkpoint, gc_callback],
-)
+for epoch in range(num_epochs):
+    model.train()
+    running_loss = 0.0
+    
+    for inputs, labels in train_loader:
+        optimizer.zero_grad()
+        outputs = model(inputs)
+        loss = criterion(outputs, labels)
+        loss.backward()
+        optimizer.step()
+        running_loss += loss.item()
+        
+        # for history
+        correct = 0
+        total = 0
+        _, predicted = torch.max(outputs.data, 1)
+        total += labels.size(0)
+        correct += (predicted == labels).sum().item()
+        
+        train_loss = running_loss / len(train_loader)
+        train_accuracy = 100 * correct / total
+        history['train_loss'].append(train_loss)
+        history['train_accuracy'].append(train_accuracy)
+    
+    # Validation step
+    model.eval()
+    val_loss = 0.0
+    with torch.no_grad():
+        for inputs, labels in val_loader:
+            outputs = model(inputs)
+            loss = criterion(outputs, labels)
+            val_loss += loss.item()
+            
+            # for history
+            val_correct = 0
+            val_total = 0
+            _, predicted = torch.max(outputs.data, 1)
+            val_total += labels.size(0)
+            val_correct += (predicted == labels).sum().item()
+            
+            val_loss = val_loss / len(val_loader)
+            val_accuracy = 100 * val_correct / val_total
+            history['val_loss'].append(val_loss)
+            history['val_accuracy'].append(val_accuracy)
+    
+    # for record in command prompt
+    logs = f'Epoch [{epoch+1}/{num_epochs}], \
+        Loss: {loss.item():.4f}, Val Loss: {val_loss:.4f}\
+        Accuracy: {train_accuracy:.4f}, Val Accuracy: {val_accuracy:.4f}'
+        
+    print(logs)
+    with open('logs.txt','a') as f:
+        f.write(logs)
+    
+    # Reduce LR on plateau
+    scheduler.step(val_loss)
+    
+    # Early stopping and Model checkpoint
+    if val_loss < best_val_loss:
+        best_val_loss = val_loss
+        torch.save(model.state_dict(), 'best_model.pth')
+        patience = 5  # Reset patience since we found a better model
+    else:
+        patience -= 1
+        if patience == 0:
+            break
+    
+    # Garbage collection
+    gc.collect()
 
-print('fitting done')
+    
+print("Training complete")
 
-model.save('Conv2D_handmade_model.h5')
-
-# Convert the history.history dict to a JSON file
 with open('history.json', 'w') as f:
-    json.dump(history.history, f)
+    json.dump(history, f)
+print('Saved history.json')
+
+# Save final model
+torch.save(model.state_dict(), 'Conv2D_handmade_model.pth')
+print('Saved model')
+
+# history = model.fit(
+#     train_generator,
+#     steps_per_epoch=steps_per_epoch,
+#     validation_data=val_generator,
+#     validation_steps=validation_steps,
+#     epochs=1000000,  # Set the number of epochs
+#     verbose=1,
+#     callbacks=[early_stopping, reduce_lr, model_checkpoint, gc_callback],
+# )
+
+
+# model.save('Conv2D_handmade_model.h5')
+
+# # Convert the history.history dict to a JSON file
+# with open('history.json', 'w') as f:
+#     json.dump(history.history, f)
