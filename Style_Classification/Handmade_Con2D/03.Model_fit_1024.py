@@ -8,6 +8,8 @@ import torch.optim as optim
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torchsummary import summary
 from contextlib import redirect_stdout
+from tqdm import tqdm
+
 
 import os
 import h5py
@@ -24,6 +26,7 @@ from sklearn.model_selection import train_test_split
 h5_path = '/home/all/processed_data/image_torchtensor_1024.h5'  # Update with your path
 styles = np.load('/home/all/processed_data/styles_1024.npy', allow_pickle=True)  # Your styles data
 
+
 # Load one image to get the input shape
 with h5py.File(h5_path, 'r') as h5file:
     one_file = h5file['images'][0:1]  # Load the first image
@@ -33,6 +36,10 @@ with h5py.File(h5_path, 'r') as h5file:
 
 le = LabelEncoder()
 y = le.fit_transform(styles)
+
+# Convert the NumPy array of labels into a torch tensor
+# y_tensor = torch.from_numpy(y).long()  # Ensure it's a LongTensor for classification tasks
+
 
 # Assuming total number of images
 num_images = len(y)  # or len(combined_df)
@@ -59,15 +66,15 @@ class H5Dataset(Dataset):
         with h5py.File(self.h5_path, 'r') as h5file:
             # Use the index to access the image and label
             image = h5file['images'][self.indices[idx]]
-            style = self.styles[self.indices[idx]]
-            return torch.from_numpy(image).float(), style
+            styles = self.styles[self.indices[idx]]
+            return torch.from_numpy(image).float(), torch.tensor(styles).long()
 
 # Load your data and labels
-train_data = H5Dataset(h5_path, indices_train, styles)
-val_data = H5Dataset(h5_path, indices_val, styles)
-test_data = H5Dataset(h5_path, indices_test, styles)
+train_data = H5Dataset(h5_path, indices_train, y)
+val_data = H5Dataset(h5_path, indices_val, y)
+test_data = H5Dataset(h5_path, indices_test, y)
 
-batch_size = 8  # Define your batch size
+batch_size = 16  # Define your batch size
 
 # Create data loaders
 train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
@@ -78,9 +85,9 @@ print('Data loader set')
 
 
 # Handmade Conv2D Model
-class model(nn.Module):
+class Model(nn.Module):
     def __init__(self):
-        super(model, self).__init__()
+        super(Model, self).__init__()
         # Convolutional layers
         self.conv1 = nn.Sequential(
             nn.Conv2d(in_channels=one_file.shape[1], out_channels=64, kernel_size=4, stride=1, padding='same'),
@@ -103,7 +110,7 @@ class model(nn.Module):
         
         # Fully connected layers
         self.fc = nn.Sequential(
-            nn.Flatten(),
+            nn.Flatten(),  # 4096 개 나옴
             nn.Dropout(0.3),
             nn.Linear(4096, 512), # You need to calculate the input_shape_after_conv based on your input size
             nn.BatchNorm1d(512),
@@ -123,7 +130,7 @@ class model(nn.Module):
         return x
 
 # Initialize the model
-model = model()
+model = Model()
 
 # Capture the summary output
 summary_string = io.StringIO()
@@ -137,6 +144,14 @@ with open('model_summary.txt', 'w') as file:
     file.write(model_summary)
     
 print('model_summary.txt saved')
+
+
+# Setting device to GPU if available
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print("Using device:", device)
+
+# Move model to the chosen device
+model = model.to(device)
 
 # # Capture the summary output
 # summary_string = io.StringIO()
@@ -156,7 +171,7 @@ num_epochs = 10000000
 
 # Early Stopping and Model Checkpoint can be manually implemented in the training loop
 best_val_loss = float('inf')
-patience = 5  # For early stopping
+patience = 10  # For early stopping
 scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.2, patience=5, min_lr=0.001)
 
 # initialize history
@@ -198,8 +213,15 @@ print('start fitting')
 for epoch in range(num_epochs):
     model.train()
     running_loss = 0.0
+    correct = 0
+    total = 0
     
-    for inputs, labels in train_loader:
+    # Wrap your loader with tqdm for a progress bar
+    pbar = tqdm(enumerate(train_loader), total=len(train_loader), desc=f"Epoch {epoch+1}/{num_epochs}")
+    
+    for i, (inputs, labels) in pbar:
+        inputs, labels = inputs.to(device), labels.to(device)
+        
         optimizer.zero_grad()
         outputs = model(inputs)
         loss = criterion(outputs, labels)
@@ -208,37 +230,49 @@ for epoch in range(num_epochs):
         running_loss += loss.item()
         
         # for history
-        correct = 0
-        total = 0
+        # Calculate predictions for accuracy
         _, predicted = torch.max(outputs.data, 1)
         total += labels.size(0)
         correct += (predicted == labels).sum().item()
         
-        train_loss = running_loss / len(train_loader)
-        train_accuracy = 100 * correct / total
-        history['train_loss'].append(train_loss)
-        history['train_accuracy'].append(train_accuracy)
+        # Update progress bar
+        pbar.set_postfix({'loss': running_loss / (i + 1)})
+        
+    # Calculate average loss and accuracy over the epoch
+    train_loss = running_loss / len(train_loader)
+    train_accuracy = 100 * correct / total
+    
+    history['train_loss'].append(train_loss)
+    history['train_accuracy'].append(train_accuracy)
     
     # Validation step
     model.eval()
     val_loss = 0.0
+    val_correct = 0
+    val_total = 0
+    
     with torch.no_grad():
         for inputs, labels in val_loader:
+            inputs, labels = inputs.to(device), labels.to(device)
+            
             outputs = model(inputs)
             loss = criterion(outputs, labels)
             val_loss += loss.item()
             
             # for history
-            val_correct = 0
-            val_total = 0
+            # Calculate predictions for accuracy
             _, predicted = torch.max(outputs.data, 1)
             val_total += labels.size(0)
             val_correct += (predicted == labels).sum().item()
             
-            val_loss = val_loss / len(val_loader)
-            val_accuracy = 100 * val_correct / val_total
-            history['val_loss'].append(val_loss)
-            history['val_accuracy'].append(val_accuracy)
+    # Calculate average loss and accuracy over the validation set
+    val_loss = val_loss / len(val_loader)
+    val_accuracy = 100 * val_correct / val_total
+
+    # Append to history after each epoch
+    history['val_loss'].append(val_loss)
+    history['val_accuracy'].append(val_accuracy)
+    
     
     # for record in command prompt
     logs = f'Epoch [{epoch+1}/{num_epochs}], \
@@ -249,13 +283,16 @@ for epoch in range(num_epochs):
     with open('logs.txt','a') as f:
         f.write(logs)
     
+    
     # Reduce LR on plateau
     scheduler.step(val_loss)
+    
     
     # Early stopping and Model checkpoint
     if val_loss < best_val_loss:
         best_val_loss = val_loss
-        torch.save(model.state_dict(), 'best_model.pth')
+        torch.save(model.state_dict(), 'best_model_state_dict.pth')
+        torch.save(model, 'best_model.pth')
         patience = 5  # Reset patience since we found a better model
     else:
         patience -= 1
@@ -273,7 +310,8 @@ with open('history.json', 'w') as f:
 print('Saved history.json')
 
 # Save final model
-torch.save(model.state_dict(), 'Conv2D_handmade_model.pth')
+torch.save(model.state_dict(), 'Conv2D_handmade_model_state_dict.pth')
+torch.save(model, 'Conv2D_handmade_model.pth')
 print('Saved model')
 
 # history = model.fit(
