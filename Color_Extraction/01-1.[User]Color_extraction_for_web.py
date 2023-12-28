@@ -1,5 +1,5 @@
-# 01-0.
-# for web
+# 01-1.
+# for User image
 # This Python file is intended to extract colors(3) and percentages from website input image!!!!
 # used: scikit-learn for KMeans
 # without nugi

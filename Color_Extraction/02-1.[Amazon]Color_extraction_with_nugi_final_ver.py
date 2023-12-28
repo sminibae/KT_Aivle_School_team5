@@ -1,4 +1,5 @@
-# 01-2.
+# 02-1.
+# for Amazon image data
 # This Python file is intended to extract colors(3) and percentages from Amazon data!!!!
 # used: cuML for KMeans
 # with 'nugi'
