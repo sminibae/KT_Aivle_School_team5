@@ -1,0 +1,84 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>나만의 방 나방</title>
+    <link rel="stylesheet" href="{% static 'css/style.css' %}">
+    <nav class="nav-container">
+        <div class="nav-content">
+        <a href="{% url 'index' %}">
+            <img src="{% static 'images/logo.png' %}" alt="로고" class="logo">
+        <ul class="nav-menu">
+            <li><a href="/airecommend/">맞춤형 가구 추천</a></li>
+            <li><a href="ai-remodeling">AI 리모델링 컨설팅</a></li>
+        </ul>
+        <div class="nav-right">
+            <a href="#" class="nav-login-link">로그인</a>
+            <a href="/signup" class="signup-button">회원가입</a>
+        </div>
+        </div>
+    </nav>
+</head>
+<body>
+    <section class="custom-furniture-section">
+        <div class="text-content">
+            <h2>사용자 맞춤형 가구 추천</h2>
+            <p>700,000장의 가구 데이터를 활용한 AI가<br>방을 분석하여 맞춤형으로 가구를 추천해주는 서비스</p>
+            <a href="/airecommend" class="recommend-button">추천 받기</a>
+        </div>
+        <div class="image-content">
+            <img src="{% static 'images/airecommend.png' %}" alt="가구 추천 이미지">
+        </div>
+    </section>
+    <section class="ai-remodeling-section">
+        <div class="content-box">
+            <div class="text-content">
+                <h2>AI를 활용한 무료 리모델링 컨설팅</h2>
+                <p>사용자의 방에 맞추어, 원하는 스타일로 리모델링 한 모습을 제공하고<br>유사한 가구 및 소품까지 추천해주는 서비스</p>
+                <a href="/airecommend" class="recommend-button">컨설팅 받기</a>
+            </div>
+        </div>
+        <!-- 이 섹션에 이미지가 있다면 다른 div로 감싸거나 여기에 추가 -->
+    </section>
+    <section class="bottom-image-section">
+        <div class="bottom-image">
+            <img src="{% static 'images/remodeling.jpg' %}" alt="리모델링 이미지">
+        </div>
+    </section>
+    <footer class="site-footer">
+        <div class="container">
+            <div class="footer-content">
+                <p>Copyright AIVLE School Team 5. All Rights Reserved.</p>
+                <ul class="footer-links">
+                    <li><a href="/privacy/">개인정보 처리방침</a></li>
+                    <li><a href="/terms/">이용약관</a></li>
+                    <li><a href="/contact/">문의하기</a></li>
+                </ul>
+            </div>
+            </div>
+        </div>
+    </footer>
+    <div id="login-popup" class="popup">
+        <div class="popup-content">
+            <span class="close-button">&times;</span>
+            <!-- 로그인 폼 -->
+            <form id="login-form">
+                <h1>로그인</h1>
+                <input type="email" placeholder="이메일">
+                <input type="password" placeholder="비밀번호">
+                <button type="submit">로그인</button>
+            </form>
+    
+            <!-- 소셜 로그인 버튼 -->
+            <div class="social-login">
+                <button class="social-button kakao-login">카카오톡 로그인</button>
+                <button class="social-button naver-login">네이버 로그인</button>
+                <button class="social-button google-login">구글 로그인</button>
+            </div>
+        </div>
+    </div>
+    <script src="{% static 'js/common.js' %}"></script>
+</body>
+</html>
