@@ -1,0 +1,108 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>맞춤형 가구 추천</title>
+    <link rel="stylesheet" href="{% static 'css/style.css' %}">
+    <nav class="nav-container">
+        <div class="nav-content">
+        <a href="{% url 'index' %}">
+            <img src="{% static 'images/logo.png' %}" alt="로고" class="logo">
+        <ul class="nav-menu">
+            <li><a href="/airecommend/">맞춤형 가구 추천</a></li>
+            <li><a href="ai-remodeling">AI 리모델링 컨설팅</a></li>
+        </ul>
+        <div class="nav-right">
+            <a href="#" class="nav-login-link">로그인</a>
+            <a href="/signup" class="signup-button">회원가입</a>
+        </div>
+        </div>
+    </nav>
+</head>
+<body class="airecommend-page">
+    <section class="ai-recommend-section">
+        <h2>AI기반 맞춤형 가구 추천</h2>
+        <p>사용자의 방 사진을 기반으로 스타일을 분석하여<br>비슷한 분위기의 가구를 추천해줍니다.</p>
+    </section>
+
+<section class="file-upload-section">
+    <form action="/file-upload" method="post" enctype="multipart/form-data">
+        {% csrf_token %}
+        <div class="file-upload-container">
+            <label for="file-upload" class="file-upload-label">
+                <input type="file" id="file-upload" name="file" hidden onchange="previewFile(this.files[0])">
+                <div class="upload-box" id="drag-drop-area">
+                    <div id="upload-instructions"> <!-- 기본 내용을 감싸는 요소 -->
+                        <img src="{% static 'images/picture.png' %}" alt="업로드 아이콘" />
+                        여기를 클릭하거나 파일을 드래그하세요.
+                    </div>
+                    <img id="preview-image" src="#" alt="Image preview" style="display: none;">
+                    <div id="change-instructions" style="display: none;">
+                    <p>다른 이미지를 선택하시려면 박스를 클릭하세요.</p>
+                    <p>또는 다른 이미지를 드래그 앤 드롭하세요.</p>
+                </div>
+            </div>
+        </label>
+    </div>
+    <button id="analyze-button" class="analyze-button" disabled>분석하기</button>
+    </form>
+</section>
+<section class="tip-section">
+    <h2 class="main-title">Tip!</h2>
+    <div class="container">
+        <div class="tip-content">
+            <div class="tip-text">
+                <h3>사진 촬영 팁!</h3>
+                <p>- 방이 전반적으로 잘 보이게 찍어주세요.</p>
+                <p>- 밝기에 따라 분위기가 달라보입니다. 방의 조명을 켜고 찍어주세요.</p>
+                <p>- 가구 외의 잡다한 물건을 정리하고 찍으면 더욱 좋습니다.</p>
+            </div>
+            <div class="tip-image">
+                <img src="{% static 'images/tip.jpg' %}" alt="예시 이미지">
+            </div>
+        </div>
+    </div>
+</section>
+
+
+    <main>
+        <!-- 맞춤형 가구 추천에 대한 주요 내용 -->
+    </main>
+
+    <footer class="site-footer">
+        <div class="container">
+            <div class="footer-content">
+                <p>Copyright AIVLE School Team 5. All Rights Reserved.</p>
+                <ul class="footer-links">
+                    <li><a href="/privacy/">개인정보 처리방침</a></li>
+                    <li><a href="/terms/">이용약관</a></li>
+                    <li><a href="/contact/">문의하기</a></li>
+                </ul>
+            </div>
+            </div>
+        </div>
+    </footer>
+    <div id="login-popup" class="popup">
+        <div class="popup-content">
+            <span class="close-button">&times;</span>
+            <!-- 로그인 폼 -->
+            <form id="login-form">
+                <input type="email" placeholder="이메일">
+                <input type="password" placeholder="비밀번호">
+                <button type="submit">로그인</button>
+            </form>
+    
+            <!-- 소셜 로그인 버튼 -->
+            <div class="social-login">
+                <button class="social-button kakao-login">카카오톡 로그인</button>
+                <button class="social-button naver-login">네이버 로그인</button>
+                <button class="social-button google-login">구글 로그인</button>
+            </div>
+        </div>
+    </div>
+    <script src="{% static 'js/airecommend.js' %}"></script>
+    <script src="{% static 'js/common.js' %}"></script>
+</body>
+</html>
