@@ -1,15 +1,17 @@
-# ========================================================================================
+# 01-1.
+# This Python file is intended to extract colors(3) and percentages from Amazon data!!!!
+# used: cuML for KMeans
+# without nugi
 
-
-# 2.Frequency of each cluster(n=3)
+# Frequency of each cluster(n=3)
 import pandas as pd
 import os
 import numpy as np
-# from sklearn.cluster import KMeans
 from PIL import Image
 import requests
 from io import BytesIO
 from cuml.cluster import KMeans
+# from sklearn.cluster import KMeans
 
 def extract_ordered_dominant_colors_gpu(image_url, num_colors):
     # Load image from the web URL
@@ -64,7 +66,6 @@ from multiprocessing import Pool
 import pandas as pd
 import os
 import csv
-# from extract_ordered_dominant_colors import extract_ordered_dominant_colors  # Ensure this is defined or imported
 
 # Set file paths
 infos_path = '/home/all/product_infos/'
