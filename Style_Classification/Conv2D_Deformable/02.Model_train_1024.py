@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import torch
 import torch.nn as nn
+from torch.cuda.amp import autocast
 from torchvision.ops import DeformConv2d
 from torch.utils.data import Dataset, DataLoader
 import torch.optim as optim
@@ -17,6 +18,7 @@ import h5py
 import json
 import gc
 import io
+import joblib
 
 from sklearn.calibration import LabelEncoder
 from sklearn.model_selection import train_test_split
@@ -37,6 +39,9 @@ with h5py.File(h5_path, 'r') as h5file:
 
 le = LabelEncoder()
 y = le.fit_transform(styles)
+
+# Save the LabelEncoder
+joblib.dump(le, 'label_encoder.joblib')
 
 # Convert the NumPy array of labels into a torch tensor
 # y_tensor = torch.from_numpy(y).long()  # Ensure it's a LongTensor for classification tasks
@@ -69,18 +74,22 @@ class H5Dataset(Dataset):
             image = h5file['images'][self.indices[idx]]
             styles = self.styles[self.indices[idx]]
             return torch.from_numpy(image).float(), torch.tensor(styles).long()
+            # return torch.from_numpy(image).float().to(torch.float16), torch.tensor(styles).long()
 
 # Load your data and labels
 train_data = H5Dataset(h5_path, indices_train, y)
 val_data = H5Dataset(h5_path, indices_val, y)
 test_data = H5Dataset(h5_path, indices_test, y)
 
-batch_size = 16  # Define your batch size
+batch_size = 3  # Define your batch size
+
+# Set the number of accumulation steps
+accumulation_steps = 16
 
 # Create data loaders
-train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
-val_loader = DataLoader(val_data, batch_size=batch_size, shuffle=False)
-test_loader = DataLoader(test_data, batch_size=batch_size, shuffle=False)
+train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True, drop_last=True)
+val_loader = DataLoader(val_data, batch_size=batch_size, shuffle=True, drop_last=True)
+test_loader = DataLoader(test_data, batch_size=batch_size, shuffle=False, drop_last=True)
 
 print('Data loader set')
 
@@ -141,21 +150,20 @@ class Model(nn.Module):
         self.avgpool2d5     = nn.AvgPool2d(kernel_size=2)
         
         # Fully connected layers
-        self.fc = nn.Sequential(
-            nn.Flatten(),  # 16384 개 나옴
-            nn.Dropout(0.3),
-            nn.Linear(15376,4096),
-            nn.BatchNorm1d(4096),
-            nn.LeakyReLU(0.01),
-            nn.Linear(4096, 512),
-            nn.BatchNorm1d(512),
-            nn.LeakyReLU(0.01),
-            nn.Linear(512, 64),
-            nn.BatchNorm1d(64),
-            nn.LeakyReLU(0.01),
-            nn.Linear(64, 7),
-            # nn.Softmax(dim=1)
-        )
+        self.flatten      = nn.Flatten()
+        self.dropout1d1   = nn.Dropout(0.3)
+        self.linear1      = nn.Linear(15376,4096)  # 16384 개 나와야함 / padding 뭔가 이상해서 15376개 나옴
+        self.batchnorm1d1 = nn.BatchNorm1d(4096)
+        self.leakyrelu6   = nn.LeakyReLU(0.01)
+        self.linear2      = nn.Linear(4096,512)
+        self.batchnorm1d2 = nn.BatchNorm1d(512)
+        self.leakyrelu7   = nn.LeakyReLU(0.01)
+        self.linear3      = nn.Linear(512,64)
+        self.batchnorm1d3 = nn.BatchNorm1d(64)
+        self.leakyrelu8   = nn.LeakyReLU(0.01)
+        self.linear4      = nn.Linear(64,7)
+                          # nn.Softmax(dim=1)
+
 
     def forward(self, x):
         # Predict offsets for the first deformable convolution layer
@@ -194,7 +202,18 @@ class Model(nn.Module):
         x = self.dropout2d5(x)
         x = self.avgpool2d5(x)        
         
-        x = self.fc(x)
+        x = self.flatten(x)
+        x = self.dropout1d1(x)
+        x = self.linear1(x)
+        x = self.batchnorm1d1(x)
+        x = self.leakyrelu6(x)
+        x = self.linear2(x)
+        x = self.batchnorm1d2(x)
+        x = self.leakyrelu7(x)
+        x = self.linear3(x)
+        x = self.batchnorm1d3(x)
+        x = self.leakyrelu8(x)
+        x = self.linear4(x)
         return x
 
 # Initialize the model
@@ -232,15 +251,34 @@ model = model.to(device)
 #     file.write(summary)
 
 
-# Assuming 'model' is your PyTorch model
+
 criterion = nn.CrossEntropyLoss()  # For categorical crossentropy
-optimizer = optim.Adam(model.parameters(), lr=0.001)  # Using Adam optimizer
+
+decay_params = []  # Parameters for which to apply weight decay
+no_decay_params = []  # Parameters for which not to apply weight decay
+
+for name, param in model.named_parameters():
+    if not param.requires_grad:
+        continue  # Skip parameters that don't require gradients
+    if len(param.shape) == 1 or name.endswith(".bias") or "batchnorm" in name:
+        no_decay_params.append(param)  # No decay for biases and BN parameters
+    else:
+        decay_params.append(param)
+        
+        
+# Now, set the optimizer with two parameter groups
+optimizer = optim.Adam([
+    {'params': no_decay_params, 'weight_decay': 0.0},  # No weight decay
+    {'params': decay_params, 'weight_decay': 0.01}  # Apply weight decay
+], lr=0.01)
+
+# epochs
 num_epochs = 10000000
 
 # Early Stopping and Model Checkpoint can be manually implemented in the training loop
 best_val_loss = float('inf')
 patience = 10  # For early stopping
-scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.2, patience=5, min_lr=0.001)
+scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.2, patience=3, min_lr=0.001)
 
 # initialize history
 history = {'train_loss': [], 'val_loss': [], 'train_accuracy': [], 'val_accuracy': []}
@@ -258,23 +296,29 @@ for epoch in range(num_epochs):
     pbar_train = tqdm(enumerate(train_loader), total=len(train_loader), desc=f"Epoch {epoch+1}/{num_epochs}")
     
     for i, (inputs, labels) in pbar_train:
-        inputs, labels = inputs.to(device), labels.to(device)
-        
-        optimizer.zero_grad()
-        outputs = model(inputs)
-        loss = criterion(outputs, labels)
-        loss.backward()
-        optimizer.step()
-        running_loss += loss.item()
-        
-        # for history
-        # Calculate predictions for accuracy
-        _, predicted = torch.max(outputs.data, 1)
-        total += labels.size(0)
-        correct += (predicted == labels).sum().item()
-        
-        # Update progress bar
-        pbar_train.set_postfix({'loss': running_loss / (i + 1)})
+        with autocast():  # Automatic mixed precision context
+            inputs, labels = inputs.to(device), labels.to(device)
+            
+            outputs = model(inputs)
+            loss = criterion(outputs, labels)
+            loss = loss/ accumulation_steps
+            loss.backward()
+            running_loss += loss.item()
+            
+            # Perform optimization step after accumulating enough gradients
+            if (i + 1) % accumulation_steps == 0 or i + 1 == len(train_loader):
+                optimizer.step()  # Update weights
+                optimizer.zero_grad()  # Clear gradients for the next set of mini-batches
+
+            
+            # for history
+            # Calculate predictions for accuracy
+            _, predicted = torch.max(outputs.data, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+            
+            # Update progress bar
+            pbar_train.set_postfix({'loss': running_loss / (i + 1)})
         
     # Calculate average loss and accuracy over the epoch
     train_loss = running_loss / len(train_loader)
@@ -294,20 +338,21 @@ for epoch in range(num_epochs):
     
     with torch.no_grad():
         for i, (inputs, labels) in pbar_eval:
-            inputs, labels = inputs.to(device), labels.to(device)
-            
-            outputs = model(inputs)
-            loss = criterion(outputs, labels)
-            val_loss += loss.item()
-            
-            # for history
-            # Calculate predictions for accuracy
-            _, predicted = torch.max(outputs.data, 1)
-            val_total += labels.size(0)
-            val_correct += (predicted == labels).sum().item()
-            
-            # Update progress bar
-            pbar_eval.set_postfix({'loss': val_loss / (i + 1)})
+            with autocast():  # Automatic mixed precision context
+                inputs, labels = inputs.to(device), labels.to(device)
+                
+                outputs = model(inputs)
+                loss = criterion(outputs, labels)
+                val_loss += loss.item()
+                
+                # for history
+                # Calculate predictions for accuracy
+                _, predicted = torch.max(outputs.data, 1)
+                val_total += labels.size(0)
+                val_correct += (predicted == labels).sum().item()
+                
+                # Update progress bar
+                pbar_eval.set_postfix({'val_loss': val_loss / (i + 1)})
             
     # Calculate average loss and accuracy over the validation set
     val_loss = val_loss / len(val_loader)
